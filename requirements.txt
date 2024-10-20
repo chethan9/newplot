@@ -1,0 +1,6 @@
+Flask==2.2.5
+pdf2image==1.16.3
+python-docx==0.8.11
+Pillow==10.0.0
+PyMuPDF==1.22.5
+b2sdk==1.17.0
