@@ -17,6 +17,13 @@ KEY_ID = '004d9965f7b24df0000000005'
 APP_KEY = 'K004Tw4DUcnSIq4jiQ/ZXjZisfAv684'
 CONVERSION_API_TOKEN = '8747d93b31419ff444c769a7c1d8ab3b'  # Conversion API token
 
+# Supported formats (top 15)
+SUPPORTED_FORMATS = [
+    'jpeg', 'png', 'pdf', 'doc', 'docx', 'xls',
+    'xlsx', 'pptx', 'odt', 'rtf', 'txt', 'csv',
+    'ppt', 'dot', 'xml'
+]
+
 # Helper function to authorize Backblaze
 def authorize_backblaze():
     response = requests.get(BACKBLAZE_AUTH_URL, auth=(KEY_ID, APP_KEY))
@@ -43,12 +50,15 @@ def upload_to_backblaze(api_url, auth_token, upload_url, file_path, file_name):
 # Endpoint for processing files
 @app.route('/process_file', methods=['POST'])
 def process_file():
-    # Retrieve file and process type from request
     uploaded_file = request.files.get('file')
     process_type = request.form.get('process')
+    target_format = request.form.get('format', 'jpeg').lower()
 
     if not uploaded_file or not process_type:
-        return jsonify({"error": "File and process type are required"}), 400
+        return jsonify({"error": "File, process type, and format are required"}), 400
+
+    if target_format not in SUPPORTED_FORMATS:
+        return jsonify({"error": f"Unsupported format. Supported formats are: {', '.join(SUPPORTED_FORMATS)}"}), 400
 
     # Save file to local directory
     if not os.path.exists(LOCAL_STORAGE):
@@ -57,9 +67,9 @@ def process_file():
     uploaded_file.save(file_path)
 
     try:
-        # Process Type 1: Convert document to JPEG only
+        # Process Type 1: Convert document to specified format only
         if process_type == '1':
-            converted_url = convert_to_jpeg(file_path)
+            converted_url = convert_to_format(file_path, target_format)
             return jsonify({"converted_url": converted_url})
 
         # Process Type 2: Upload existing file to Backblaze
@@ -70,8 +80,8 @@ def process_file():
 
         # Process Type 3: Convert and then upload to Backblaze
         elif process_type == '3':
-            # Convert file to JPEG
-            converted_url = convert_to_jpeg(file_path)
+            # Convert file to specified format
+            converted_url = convert_to_format(file_path, target_format)
 
             # Download the converted file to local folder
             converted_file_path = download_file(converted_url, uploaded_file.filename)
@@ -92,13 +102,13 @@ def process_file():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# Helper function to convert document to JPEG
-def convert_to_jpeg(file_path):
+# Helper function to convert document to specified format
+def convert_to_format(file_path, target_format):
     files = {'file': open(file_path, 'rb')}
     data = {
-        'to': 'jpeg',
+        'to': target_format,
         'compress': '',
-        'token':'8747d93b31419ff444c769a7c1d8ab3b'  # Include the token here
+        'token': CONVERSION_API_TOKEN
     }
 
     try:
@@ -108,8 +118,9 @@ def convert_to_jpeg(file_path):
         print(f"Conversion API Response Status: {response.status_code}")
         print(f"Conversion API Response Content: {response.content.decode()}")
 
-        if response.status_code == 200:
-            converted_file_url = response.json().get('CONVERTED_FILE')
+        if response.status_code in [200, 201]:  # Success for 200 or 201
+            response_data = response.json()
+            converted_file_url = response_data.get('CONVERTED_FILE')
 
             if not converted_file_url:
                 raise Exception("Failed to get the converted file URL from the response")
@@ -119,7 +130,7 @@ def convert_to_jpeg(file_path):
             raise Exception(f"Conversion failed with status code {response.status_code}: {response.content.decode()}")
 
     except Exception as e:
-        print(f"Error in convert_to_jpeg: {str(e)}")
+        print(f"Error in convert_to_format: {str(e)}")
         raise
 
 # Helper function to download the file
@@ -159,7 +170,6 @@ def upload_file_to_backblaze(file_path, file_name, auth_data):
 def generate_backblaze_public_link(auth_data, file_name):
     download_url = auth_data['downloadUrl']
     return f"{download_url}/file/{BACKBLAZE_BUCKET_NAME}/{file_name}"
-
 
 if __name__ == '__main__':
     app.run()
