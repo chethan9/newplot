@@ -11,6 +11,7 @@ BACKBLAZE_BUCKET_NAME = 'storagevizsoft'
 BACKBLAZE_AUTH_URL = 'https://api.backblazeb2.com/b2api/v2/b2_authorize_account'
 CONVERSION_API_URL = 'https://api-tasker.onlineconvertfree.com/api/upload'
 LOCAL_STORAGE = './local_files'
+
 # Backblaze B2 credentials
 KEY_ID = '004d9965f7b24df0000000005'
 APP_KEY = 'K004Tw4DUcnSIq4jiQ/ZXjZisfAv684'
@@ -33,7 +34,10 @@ def upload_to_backblaze(api_url, auth_token, upload_url, file_path, file_name):
     }
     with open(file_path, 'rb') as file_data:
         response = requests.post(upload_url, headers=headers, data=file_data)
-    return response.json()
+    if response.status_code == 200:
+        return response.json()
+    else:
+        raise Exception(f"Failed to upload file to Backblaze: {response.content.decode()}")
 
 # Endpoint for processing files
 @app.route('/process_file', methods=['POST'])
@@ -51,23 +55,20 @@ def process_file():
     file_path = os.path.join(LOCAL_STORAGE, uploaded_file.filename)
     uploaded_file.save(file_path)
 
-    # Process Type 1: Convert document to JPEG only
-    if process_type == '1':
-        converted_url = convert_to_jpeg(file_path)
-        return jsonify({"converted_url": converted_url})
+    try:
+        # Process Type 1: Convert document to JPEG only
+        if process_type == '1':
+            converted_url = convert_to_jpeg(file_path)
+            return jsonify({"converted_url": converted_url})
 
-    # Process Type 2: Upload existing file to Backblaze
-    elif process_type == '2':
-        try:
+        # Process Type 2: Upload existing file to Backblaze
+        elif process_type == '2':
             auth_data = authorize_backblaze()
             upload_response = upload_file_to_backblaze(file_path, uploaded_file.filename, auth_data)
             return jsonify({"backblaze_response": upload_response})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
 
-    # Process Type 3: Convert and then upload to Backblaze
-    elif process_type == '3':
-        try:
+        # Process Type 3: Convert and then upload to Backblaze
+        elif process_type == '3':
             # Convert file to JPEG
             converted_url = convert_to_jpeg(file_path)
 
@@ -84,21 +85,37 @@ def process_file():
                 "public_link": generate_backblaze_public_link(auth_data, uploaded_file.filename)
             })
 
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        else:
+            return jsonify({"error": "Invalid process type. Choose 1, 2, or 3."}), 400
 
-    else:
-        return jsonify({"error": "Invalid process type. Choose 1, 2, or 3."}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # Helper function to convert document to JPEG
 def convert_to_jpeg(file_path):
     files = {'file': open(file_path, 'rb')}
     data = {'to': 'jpeg'}
-    response = requests.post(CONVERSION_API_URL, files=files, data=data)
-    if response.status_code == 200:
-        return response.json().get('CONVERTED_FILE')
-    else:
-        raise Exception("Conversion failed")
+
+    try:
+        response = requests.post(CONVERSION_API_URL, files=files, data=data)
+
+        # Debugging: Print response status and content
+        print(f"Conversion API Response Status: {response.status_code}")
+        print(f"Conversion API Response Content: {response.content.decode()}")
+
+        if response.status_code == 200:
+            converted_file_url = response.json().get('CONVERTED_FILE')
+            
+            if not converted_file_url:
+                raise Exception("Failed to get the converted file URL from the response")
+            
+            return converted_file_url
+        else:
+            raise Exception(f"Conversion failed with status code {response.status_code}: {response.content.decode()}")
+
+    except Exception as e:
+        print(f"Error in convert_to_jpeg: {str(e)}")
+        raise
 
 # Helper function to download the file
 def download_file(url, filename):
@@ -122,8 +139,9 @@ def upload_file_to_backblaze(file_path, file_name, auth_data):
         headers={'Authorization': auth_token},
         json={'bucketId': BACKBLAZE_BUCKET_ID}
     )
+
     if upload_url_resp.status_code != 200:
-        raise Exception("Failed to get upload URL")
+        raise Exception(f"Failed to get upload URL: {upload_url_resp.content.decode()}")
 
     upload_url_data = upload_url_resp.json()
     upload_url = upload_url_data['uploadUrl']
@@ -138,4 +156,4 @@ def generate_backblaze_public_link(auth_data, file_name):
     return f"{download_url}/file/{BACKBLAZE_BUCKET_NAME}/{file_name}"
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run()
