@@ -57,13 +57,19 @@ def sanitize_filename(filename):
 def process_file():
     uploaded_file = request.files.get('file')
     process_type = request.form.get('process')
-    target_format = request.form.get('format', 'jpeg').lower()
+    target_format = request.form.get('format')
 
     if not uploaded_file or not process_type:
-        return jsonify({"error": "File, process type, and format are required"}), 400
+        return jsonify({"error": "File and process type are required"}), 400
 
-    if target_format not in SUPPORTED_FORMATS:
-        return jsonify({"error": f"Unsupported format. Supported formats are: {', '.join(SUPPORTED_FORMATS)}"}), 400
+    # For Process Types 1 and 3, 'format' is required
+    if process_type in ['1', '3'] and not target_format:
+        return jsonify({"error": "Format is required for process types 1 and 3"}), 400
+
+    if target_format:
+        target_format = target_format.lower()
+        if target_format not in SUPPORTED_FORMATS:
+            return jsonify({"error": f"Unsupported format. Supported formats are: {', '.join(SUPPORTED_FORMATS)}"}), 400
 
     # Save file to local directory
     if not os.path.exists(LOCAL_STORAGE):
@@ -85,7 +91,12 @@ def process_file():
             sanitized_filename = sanitize_filename(uploaded_file.filename)
 
             upload_response = upload_file_to_backblaze(file_path, sanitized_filename, auth_data)
-            return jsonify({"backblaze_response": upload_response})
+            public_link = generate_backblaze_public_link(auth_data, sanitized_filename)
+
+            return jsonify({
+                "backblaze_response": upload_response,
+                "public_link": public_link
+            })
 
         # Process Type 3: Convert and then upload to Backblaze
         elif process_type == '3':
@@ -100,10 +111,12 @@ def process_file():
             sanitized_filename = sanitize_filename(uploaded_file.filename)
 
             upload_response = upload_file_to_backblaze(converted_file_path, sanitized_filename, auth_data)
+            public_link = generate_backblaze_public_link(auth_data, sanitized_filename)
+
             return jsonify({
                 "converted_url": converted_url,
                 "backblaze_response": upload_response,
-                "public_link": generate_backblaze_public_link(auth_data, sanitized_filename)
+                "public_link": public_link
             })
 
         else:
@@ -118,7 +131,7 @@ def convert_to_format(file_path, target_format):
     data = {
         'to': target_format,
         'compress': '',
-        'token': CONVERSION_API_TOKEN
+        'token': CONVERSION_API_TOKEN  # Include the token in the request
     }
 
     try:
