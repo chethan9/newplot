@@ -15,6 +15,7 @@ LOCAL_STORAGE = './local_files'
 # Backblaze B2 credentials
 KEY_ID = '004d9965f7b24df0000000005'
 APP_KEY = 'K004Tw4DUcnSIq4jiQ/ZXjZisfAv684'
+CONVERSION_API_TOKEN = '8747d93b31419ff444c769a7c1d8ab3b'  # Conversion API token
 
 # Helper function to authorize Backblaze
 def authorize_backblaze():
@@ -94,7 +95,11 @@ def process_file():
 # Helper function to convert document to JPEG
 def convert_to_jpeg(file_path):
     files = {'file': open(file_path, 'rb')}
-    data = {'to': 'jpeg'}
+    data = {
+        'to': 'jpeg',
+        'compress': '',
+        'token':'8747d93b31419ff444c769a7c1d8ab3b'  # Include the token here
+    }
 
     try:
         response = requests.post(CONVERSION_API_URL, files=files, data=data)
@@ -105,10 +110,10 @@ def convert_to_jpeg(file_path):
 
         if response.status_code == 200:
             converted_file_url = response.json().get('CONVERTED_FILE')
-            
+
             if not converted_file_url:
                 raise Exception("Failed to get the converted file URL from the response")
-            
+
             return converted_file_url
         else:
             raise Exception(f"Conversion failed with status code {response.status_code}: {response.content.decode()}")
@@ -154,6 +159,7 @@ def upload_file_to_backblaze(file_path, file_name, auth_data):
 def generate_backblaze_public_link(auth_data, file_name):
     download_url = auth_data['downloadUrl']
     return f"{download_url}/file/{BACKBLAZE_BUCKET_NAME}/{file_name}"
+
 
 if __name__ == '__main__':
     app.run()
