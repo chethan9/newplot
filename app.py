@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 import os
 import requests
 import shutil
+import urllib.parse
 
 app = Flask(__name__)
 
@@ -15,7 +16,7 @@ LOCAL_STORAGE = './local_files'
 # Backblaze B2 credentials
 KEY_ID = '004d9965f7b24df0000000005'
 APP_KEY = 'K004Tw4DUcnSIq4jiQ/ZXjZisfAv684'
-CONVERSION_API_TOKEN = '8747d93b31419ff444c769a7c1d8ab3b'  # Conversion API token
+CONVERSION_API_TOKEN = '8747d93b31419ff444c769a7c1d8ab3b'
 
 # Supported formats (top 15)
 SUPPORTED_FORMATS = [
@@ -47,6 +48,10 @@ def upload_to_backblaze(api_url, auth_token, upload_url, file_path, file_name):
     else:
         raise Exception(f"Failed to upload file to Backblaze: {response.content.decode()}")
 
+# Helper function to sanitize the file name
+def sanitize_filename(filename):
+    return urllib.parse.quote(filename.replace(' ', '_'))
+
 # Endpoint for processing files
 @app.route('/process_file', methods=['POST'])
 def process_file():
@@ -75,7 +80,11 @@ def process_file():
         # Process Type 2: Upload existing file to Backblaze
         elif process_type == '2':
             auth_data = authorize_backblaze()
-            upload_response = upload_file_to_backblaze(file_path, uploaded_file.filename, auth_data)
+
+            # Sanitize the file name before uploading
+            sanitized_filename = sanitize_filename(uploaded_file.filename)
+
+            upload_response = upload_file_to_backblaze(file_path, sanitized_filename, auth_data)
             return jsonify({"backblaze_response": upload_response})
 
         # Process Type 3: Convert and then upload to Backblaze
@@ -88,12 +97,13 @@ def process_file():
 
             # Authorize and upload to Backblaze
             auth_data = authorize_backblaze()
-            upload_response = upload_file_to_backblaze(converted_file_path, uploaded_file.filename, auth_data)
+            sanitized_filename = sanitize_filename(uploaded_file.filename)
 
+            upload_response = upload_file_to_backblaze(converted_file_path, sanitized_filename, auth_data)
             return jsonify({
                 "converted_url": converted_url,
                 "backblaze_response": upload_response,
-                "public_link": generate_backblaze_public_link(auth_data, uploaded_file.filename)
+                "public_link": generate_backblaze_public_link(auth_data, sanitized_filename)
             })
 
         else:
