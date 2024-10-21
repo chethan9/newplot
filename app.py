@@ -1,150 +1,141 @@
+from flask import Flask, request, jsonify
 import os
-from flask import Flask, request, jsonify, send_file
-from pdf2image import convert_from_path
-from docx import Document
-from PIL import Image, ImageDraw
-import fitz  # PyMuPDF
-import b2sdk.v2
+import requests
+import shutil
 
 app = Flask(__name__)
 
+# Configuration
+BACKBLAZE_BUCKET_ID = '3da90956953fa79b92240d1f'
+BACKBLAZE_BUCKET_NAME = 'storagevizsoft'
+BACKBLAZE_AUTH_URL = 'https://api.backblazeb2.com/b2api/v2/b2_authorize_account'
+CONVERSION_API_URL = 'https://api-tasker.onlineconvertfree.com/api/upload'
+LOCAL_STORAGE = './local_files'
 # Backblaze B2 credentials
-APPLICATION_KEY_ID = '004d9965f7b24df0000000004'
-APPLICATION_KEY = 'K004PuDNv5705ek5KUnNpCP7aIQlkFo'
-BUCKET_NAME = 'storagevizsoft'
+KEY_ID = '004d9965f7b24df0000000005'
+APP_KEY = 'K004Tw4DUcnSIq4jiQ/ZXjZisfAv684'
 
-# Initialize B2 API client
-def initialize_b2_client():
-    info = b2sdk.v2.InMemoryAccountInfo()
-    b2_api = b2sdk.v2.B2Api(info)
-    b2_api.authorize_account("production", APPLICATION_KEY_ID, APPLICATION_KEY)
-    return b2_api
+# Helper function to authorize Backblaze
+def authorize_backblaze():
+    response = requests.get(BACKBLAZE_AUTH_URL, auth=(KEY_ID, APP_KEY))
+    if response.status_code == 200:
+        return response.json()
+    else:
+        raise Exception("Failed to authorize Backblaze")
 
-# Utility function to save images as JPEG
-def save_image_as_jpeg(image, output_path):
-    image.save(output_path, "JPEG")
+# Helper function to upload a file to Backblaze
+def upload_to_backblaze(api_url, auth_token, upload_url, file_path, file_name):
+    headers = {
+        'Authorization': auth_token,
+        'X-Bz-File-Name': file_name,
+        'Content-Type': 'b2/x-auto',
+        'X-Bz-Content-Sha1': 'do_not_verify'
+    }
+    with open(file_path, 'rb') as file_data:
+        response = requests.post(upload_url, headers=headers, data=file_data)
+    return response.json()
 
-# Convert PDF to JPEG
-def convert_pdf_to_jpeg(file_path):
-    images = convert_from_path(file_path, dpi=300)
-    output_files = []
-    for i, image in enumerate(images):
-        output_path = f'/tmp/output_{i}.jpeg'
-        save_image_as_jpeg(image, output_path)
-        output_files.append(output_path)
-    return output_files
+# Endpoint for processing files
+@app.route('/process_file', methods=['POST'])
+def process_file():
+    # Retrieve file and process type from request
+    uploaded_file = request.files.get('file')
+    process_type = request.form.get('process')
 
-# Convert DOCX to JPEG
-def convert_docx_to_jpeg(file_path):
-    doc = Document(file_path)
-    output_files = []
-    for i, paragraph in enumerate(doc.paragraphs):
-        image = Image.new('RGB', (500, 200), color='white')
-        draw = ImageDraw.Draw(image)
-        draw.text((10, 10), paragraph.text, fill='black')
-        output_path = f'/tmp/output_{i}.jpeg'
-        save_image_as_jpeg(image, output_path)
-        output_files.append(output_path)
-    return output_files
+    if not uploaded_file or not process_type:
+        return jsonify({"error": "File and process type are required"}), 400
 
-# Convert generic documents (PDF, EPUB) to JPEG
-def convert_generic_to_jpeg(file_path):
-    doc = fitz.open(file_path)
-    output_files = []
-    for page_num in range(len(doc)):
-        page = doc.load_page(page_num)
-        pix = page.get_pixmap()
-        output_path = f'/tmp/output_{page_num}.jpeg'
-        pix.save(output_path)
-        output_files.append(output_path)
-    return output_files
+    # Save file to local directory
+    if not os.path.exists(LOCAL_STORAGE):
+        os.makedirs(LOCAL_STORAGE)
+    file_path = os.path.join(LOCAL_STORAGE, uploaded_file.filename)
+    uploaded_file.save(file_path)
 
-# Convert images to JPEG
-def convert_image_to_jpeg(file_path):
-    image = Image.open(file_path)
-    output_path = '/tmp/output.jpeg'
-    save_image_as_jpeg(image, output_path)
-    return [output_path]
+    # Process Type 1: Convert document to JPEG only
+    if process_type == '1':
+        converted_url = convert_to_jpeg(file_path)
+        return jsonify({"converted_url": converted_url})
 
-# Upload file to Backblaze B2
-def upload_to_b2(file_path, b2_api):
-    bucket = b2_api.get_bucket_by_name(BUCKET_NAME)
-    file_name = os.path.basename(file_path)
-    bucket.upload_local_file(local_file=file_path, file_name=file_name)
-    print(f'File "{file_name}" uploaded successfully to bucket "{BUCKET_NAME}".')
+    # Process Type 2: Upload existing file to Backblaze
+    elif process_type == '2':
+        try:
+            auth_data = authorize_backblaze()
+            upload_response = upload_file_to_backblaze(file_path, uploaded_file.filename, auth_data)
+            return jsonify({"backblaze_response": upload_response})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
-# Endpoint to handle file conversion and upload to B2
-@app.route('/convert-and-upload', methods=['POST'])
-def convert_and_upload():
-    if 'file' not in request.files:
-        return jsonify({"error": "No file provided"}), 400
+    # Process Type 3: Convert and then upload to Backblaze
+    elif process_type == '3':
+        try:
+            # Convert file to JPEG
+            converted_url = convert_to_jpeg(file_path)
 
-    file = request.files['file']
-    file_path = os.path.join('/tmp', file.filename)
-    file.save(file_path)
+            # Download the converted file to local folder
+            converted_file_path = download_file(converted_url, uploaded_file.filename)
 
-    try:
-        output_files = []
+            # Authorize and upload to Backblaze
+            auth_data = authorize_backblaze()
+            upload_response = upload_file_to_backblaze(converted_file_path, uploaded_file.filename, auth_data)
 
-        # Determine file type and convert accordingly
-        if file.filename.lower().endswith('.pdf'):
-            output_files = convert_pdf_to_jpeg(file_path)
-        elif file.filename.lower().endswith('.docx'):
-            output_files = convert_docx_to_jpeg(file_path)
-        elif file.filename.lower().endswith(('.epub', '.ppt', '.pptx')):
-            output_files = convert_generic_to_jpeg(file_path)
-        elif file.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-            output_files = convert_image_to_jpeg(file_path)
-        else:
-            return jsonify({"error": "Unsupported file type"}), 400
+            return jsonify({
+                "converted_url": converted_url,
+                "backblaze_response": upload_response,
+                "public_link": generate_backblaze_public_link(auth_data, uploaded_file.filename)
+            })
 
-        # Initialize B2 API client
-        b2_api = initialize_b2_client()
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
-        # Upload the first converted JPEG to B2
-        if output_files:
-            upload_to_b2(output_files[0], b2_api)
-            return send_file(output_files[0], mimetype='image/jpeg')
+    else:
+        return jsonify({"error": "Invalid process type. Choose 1, 2, or 3."}), 400
 
-        return jsonify({"error": "No output files generated"}), 500
+# Helper function to convert document to JPEG
+def convert_to_jpeg(file_path):
+    files = {'file': open(file_path, 'rb')}
+    data = {'to': 'jpeg'}
+    response = requests.post(CONVERSION_API_URL, files=files, data=data)
+    if response.status_code == 200:
+        return response.json().get('CONVERTED_FILE')
+    else:
+        raise Exception("Conversion failed")
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+# Helper function to download the file
+def download_file(url, filename):
+    response = requests.get(url, stream=True)
+    if response.status_code == 200:
+        local_file_path = os.path.join(LOCAL_STORAGE, filename)
+        with open(local_file_path, 'wb') as file:
+            shutil.copyfileobj(response.raw, file)
+        return local_file_path
+    else:
+        raise Exception("Failed to download the file")
 
-    finally:
-        # Clean up temporary files
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        for output_file in output_files:
-            if os.path.exists(output_file):
-                os.remove(output_file)
+# Helper function to upload file to Backblaze
+def upload_file_to_backblaze(file_path, file_name, auth_data):
+    api_url = auth_data['apiUrl']
+    auth_token = auth_data['authorizationToken']
 
-# New endpoint to upload any file directly to B2
-@app.route('/upload-to-b2', methods=['POST'])
-def upload_to_b2_endpoint():
-    if 'file' not in request.files:
-        return jsonify({"error": "No file provided"}), 400
+    # Get upload URL
+    upload_url_resp = requests.post(
+        f"{api_url}/b2api/v2/b2_get_upload_url",
+        headers={'Authorization': auth_token},
+        json={'bucketId': BACKBLAZE_BUCKET_ID}
+    )
+    if upload_url_resp.status_code != 200:
+        raise Exception("Failed to get upload URL")
 
-    file = request.files['file']
-    file_path = os.path.join('/tmp', file.filename)
-    file.save(file_path)
+    upload_url_data = upload_url_resp.json()
+    upload_url = upload_url_data['uploadUrl']
+    upload_auth_token = upload_url_data['authorizationToken']
 
-    try:
-        # Initialize B2 API client
-        b2_api = initialize_b2_client()
+    # Upload file
+    return upload_to_backblaze(api_url, upload_auth_token, upload_url, file_path, file_name)
 
-        # Upload the file directly to B2
-        upload_to_b2(file_path, b2_api)
-        return jsonify({"message": f'File "{file.filename}" uploaded successfully to B2'}), 200
+# Helper function to generate public download link
+def generate_backblaze_public_link(auth_data, file_name):
+    download_url = auth_data['downloadUrl']
+    return f"{download_url}/file/{BACKBLAZE_BUCKET_NAME}/{file_name}"
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-    finally:
-        # Clean up the temporary file
-        if os.path.exists(file_path):
-            os.remove(file_path)
-
-# Main entry point
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(debug=True)
