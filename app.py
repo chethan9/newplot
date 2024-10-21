@@ -104,11 +104,12 @@ def process_file():
             converted_url = convert_to_format(file_path, target_format)
 
             # Download the converted file to local folder
-            converted_file_path = download_file(converted_url, uploaded_file.filename)
+            converted_filename = f"{os.path.splitext(uploaded_file.filename)[0]}.{target_format}"
+            converted_file_path = download_file(converted_url, converted_filename)
 
-            # Authorize and upload to Backblaze
+            # Authorize and upload the converted file to Backblaze
             auth_data = authorize_backblaze()
-            sanitized_filename = sanitize_filename(uploaded_file.filename)
+            sanitized_filename = sanitize_filename(converted_filename)
 
             upload_response = upload_file_to_backblaze(converted_file_path, sanitized_filename, auth_data)
             public_link = generate_backblaze_public_link(auth_data, sanitized_filename)
