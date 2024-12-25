@@ -80,7 +80,12 @@ def unified_scraper(site_code):
 def selenium_scraper(url, selectors):
     options = Options()
     options.headless = True
-    service = Service("/path/to/chromedriver")  # Update path to your chromedriver
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+
+    # Ensure the correct path to chromedriver is set for Docker
+    service = Service("/usr/bin/chromedriver")
     driver = webdriver.Chrome(service=service, options=options)
 
     try:
