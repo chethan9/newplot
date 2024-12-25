@@ -20,12 +20,18 @@ def scrape_movies():
         # Parse the HTML content
         soup = BeautifulSoup(response.content, 'html.parser')
 
-        # Extract movie details (adjust selectors based on website's structure)
+        # Extract movie details
         movies = []
-        for movie in soup.select('.movie-card'):  # Adjust '.movie-card' as needed
-            title = movie.select_one('.movie-title').text.strip() if movie.select_one('.movie-title') else "Unknown"
-            genre = movie.select_one('.movie-genre').text.strip() if movie.select_one('.movie-genre') else "Unknown"
-            movies.append({"title": title, "genre": genre})
+        for movie_block in soup.select('div.mv-block'):  # Adjusted selector for movie blocks
+            title = movie_block.select_one('div.mv-name').text.strip() if movie_block.select_one('div.mv-name') else "Unknown"
+            genre = movie_block.select_one('div.mv-category').text.strip() if movie_block.select_one('div.mv-category') else "Unknown"
+            image_url = movie_block.select_one('img.img-fluid')['src'] if movie_block.select_one('img.img-fluid') else None
+
+            movies.append({
+                "title": title,
+                "genre": genre,
+                "image_url": image_url
+            })
 
         return jsonify({"movies": movies}), 200
     except Exception as e:
