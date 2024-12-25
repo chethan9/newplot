@@ -1,12 +1,6 @@
 from flask import Flask, jsonify, request
 import requests
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
 app = Flask(__name__)
 
@@ -76,58 +70,6 @@ def unified_scraper(site_code):
         )
     return movies
 
-# Selenium scraper for dynamic content
-def selenium_scraper(site_code):
-    if site_code not in SCRAPER_CONFIG:
-        return {"error": f"Invalid site_code: {site_code}"}
-
-    config = SCRAPER_CONFIG[site_code]
-    url = config["url"]
-    selectors = config["selectors"]
-
-    options = Options()
-    options.headless = True
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-
-    service = Service("/usr/bin/chromedriver")
-    driver = webdriver.Chrome(service=service, options=options)
-
-    try:
-        driver.get(url)
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_all_elements_located((By.CSS_SELECTOR, selectors["movie_block"]))
-        )
-        soup = BeautifulSoup(driver.page_source, "html.parser")
-        movies = []
-        for movie_block in soup.select(selectors["movie_block"]):
-            title = (
-                movie_block.select_one(selectors["title"]).text.strip()
-                if movie_block.select_one(selectors["title"])
-                else "Unknown"
-            )
-            genre_or_language = (
-                movie_block.select_one(selectors.get("genre", "language")).text.strip()
-                if movie_block.select_one(selectors.get("genre", "language"))
-                else "Unknown"
-            )
-            image_url = (
-                movie_block.select_one(selectors["image_url"])["src"]
-                if movie_block.select_one(selectors["image_url"])
-                else None
-            )
-            movies.append(
-                {
-                    "title": title,
-                    "genre_or_language": genre_or_language,
-                    "image_url": image_url,
-                }
-            )
-        return movies
-    finally:
-        driver.quit()
-
 # Function to clean up data using OMDb
 def clean_with_omdb(movie_title):
     url = f"http://www.omdbapi.com/?t={movie_title}&apikey={OMDB_API_KEY}"
@@ -160,8 +102,7 @@ def scrape_movies():
     all_data = {}
 
     for site_code in site_codes:
-        scraper_func = selenium_scraper if site_code == "vox" else unified_scraper
-        all_data[site_code] = scraper_func(site_code)
+        all_data[site_code] = unified_scraper(site_code)
 
     # Optionally clean up data with OMDb
     if use_omdb:
@@ -179,4 +120,3 @@ def scrape_movies():
 
 if __name__ == "__main__":
     app.run(debug=True)
- 
