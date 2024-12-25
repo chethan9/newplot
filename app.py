@@ -1,6 +1,12 @@
 from flask import Flask, jsonify, request
 import requests
 from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 app = Flask(__name__)
 
@@ -19,12 +25,12 @@ SCRAPER_CONFIG = {
         },
     },
     "vox": {
-        "url": "https://kwt.voxcinemas.com/showtimes?w=th&d=20241225&o=az",
+        "url": "https://kwt.voxcinemas.com/movies/whatson",
         "selectors": {
-            "movie_block": "article.movie-compare",
-            "title": "h2",
-            "language": "span.tag",
-            "image_url": "img.lazy.hero.loaded",
+            "movie_block": "div.movie-card",
+            "title": "h3",
+            "language": "span.language",
+            "image_url": "img.poster",
         },
     },
 }
@@ -46,7 +52,11 @@ def unified_scraper(site_code):
     soup = BeautifulSoup(response.content, "html.parser")
     movies = []
     for movie_block in soup.select(selectors["movie_block"]):
-        title = movie_block.select_one(selectors.get("title")).text.strip() if movie_block.select_one(selectors.get("title")) else "Unknown"
+        title = (
+            movie_block.select_one(selectors.get("title")).text.strip()
+            if movie_block.select_one(selectors.get("title"))
+            else "Unknown"
+        )
         genre_or_language = (
             movie_block.select_one(selectors.get("genre", "language")).text.strip()
             if movie_block.select_one(selectors.get("genre", "language"))
@@ -65,6 +75,47 @@ def unified_scraper(site_code):
             }
         )
     return movies
+
+# Selenium scraper for dynamic content
+def selenium_scraper(url, selectors):
+    options = Options()
+    options.headless = True
+    service = Service("/path/to/chromedriver")  # Update path to your chromedriver
+    driver = webdriver.Chrome(service=service, options=options)
+
+    try:
+        driver.get(url)
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_all_elements_located((By.CSS_SELECTOR, selectors["movie_block"]))
+        )
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        movies = []
+        for movie_block in soup.select(selectors["movie_block"]):
+            title = (
+                movie_block.select_one(selectors.get("title")).text.strip()
+                if movie_block.select_one(selectors.get("title"))
+                else "Unknown"
+            )
+            genre_or_language = (
+                movie_block.select_one(selectors.get("genre", "language")).text.strip()
+                if movie_block.select_one(selectors.get("genre", "language"))
+                else "Unknown"
+            )
+            image_url = (
+                movie_block.select_one(selectors["image_url"])["src"]
+                if movie_block.select_one(selectors["image_url"])
+                else None
+            )
+            movies.append(
+                {
+                    "title": title,
+                    "genre_or_language": genre_or_language,
+                    "image_url": image_url,
+                }
+            )
+        return movies
+    finally:
+        driver.quit()
 
 # Function to clean up data using OMDb
 def clean_with_omdb(movie_title):
@@ -99,11 +150,15 @@ def scrape_movies():
 
     for site_code in site_codes:
         if site_code == "all":
-            for key in SCRAPER_CONFIG.keys():
-                all_data[key] = unified_scraper(key)
+            for key, config in SCRAPER_CONFIG.items():
+                scraper_func = selenium_scraper if key == "vox" else unified_scraper
+                all_data[key] = scraper_func(config["url"], config["selectors"])
             break
         else:
-            all_data[site_code] = unified_scraper(site_code)
+            scraper_func = selenium_scraper if site_code == "vox" else unified_scraper
+            all_data[site_code] = scraper_func(
+                SCRAPER_CONFIG[site_code]["url"], SCRAPER_CONFIG[site_code]["selectors"]
+            )
 
     # Optionally clean up data with OMDb
     if use_omdb:
