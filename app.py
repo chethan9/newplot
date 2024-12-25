@@ -4,6 +4,9 @@ from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
+# OMDb API Key
+OMDB_API_KEY = "ae3bdd47"
+
 # Configuration for websites
 SCRAPER_CONFIG = {
     "ozone": {
@@ -63,10 +66,31 @@ def unified_scraper(site_code):
         )
     return movies
 
-# Route to scrape data based on one or more site codes
+# Function to clean up data using OMDb
+def clean_with_omdb(movie_title):
+    url = f"http://www.omdbapi.com/?t={movie_title}&apikey={OMDB_API_KEY}"
+    response = requests.get(url)
+    if response.status_code == 200:
+        data = response.json()
+        if data.get("Response") == "True":
+            return {
+                "title": data.get("Title"),
+                "year": data.get("Year"),
+                "genre": data.get("Genre"),
+                "runtime": data.get("Runtime"),
+                "director": data.get("Director"),
+                "poster": data.get("Poster"),
+            }
+        else:
+            return {"error": f"Movie not found on OMDb: {movie_title}"}
+    return {"error": "Failed to fetch data from OMDb"}
+
+# Route to scrape data with optional OMDb cleanup
 @app.route("/scrape-movies", methods=["GET"])
 def scrape_movies():
     site_codes = request.args.get("site_code")
+    use_omdb = request.args.get("use_omdb", "false").lower() == "true"
+
     if not site_codes:
         return jsonify({"error": "site_code parameter is required"}), 400
 
@@ -80,6 +104,14 @@ def scrape_movies():
             break
         else:
             all_data[site_code] = unified_scraper(site_code)
+
+    # Optionally clean up data with OMDb
+    if use_omdb:
+        for site, movies in all_data.items():
+            for movie in movies:
+                if "title" in movie:
+                    cleaned_data = clean_with_omdb(movie["title"])
+                    movie.update(cleaned_data)
 
     if not all_data:
         return jsonify({"error": "Invalid site_code(s)"}), 400
